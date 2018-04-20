@@ -10,6 +10,7 @@ import paho.mqtt.client as mqtt
 import serial
 from colorlog import ColoredFormatter
 
+USB_PORT = "/dev/ttyUSB0"
 DB_PATH = 'sqlite.db'
 MQTT_HOST = '192.168.80.197'
 
@@ -189,7 +190,7 @@ def create_db():
 
 def run():
     txt_buf = ''
-    ser = serial.Serial("/dev/ttyUSB0", baudrate=2400, timeout=0, parity=serial.PARITY_NONE)
+    ser = serial.Serial(USB_PORT, baudrate=2400, timeout=0, parity=serial.PARITY_NONE)
     data_handler = DataHandler()
     while True:
         if ser.inWaiting():
