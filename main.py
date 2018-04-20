@@ -48,6 +48,7 @@ class DataHandler(object):
         self.mqtt_client = None
         self.connected = False
         self.prev_meter_value = None
+        self.db_path = DB_PATH
         self._last_mqtt = datetime.now() - timedelta(hours=10)
         self.loop = asyncio.new_event_loop()
 
@@ -84,15 +85,16 @@ class DataHandler(object):
         self.loop.call_soon_threadsafe(asyncio.async, self.send_to_db(decoded_data))
         self.loop.call_soon_threadsafe(asyncio.async, self.send_to_mqtt(decoded_data))
 
-    @staticmethod
-    async def send_to_db(data):
+    async def send_to_db(self, data):
+        if not self.db_path:
+            return
         effect = data.get('Effect')
         if not effect:
             return
         date = data.get('day', '') + data.get('month', '') + data.get('year', '') +\
             data.get('hour', '') + data.get('minute', '') + data.get('second', '')
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute('''INSERT INTO HANdata(date, effect) VALUES(?, ?)''', (date, effect))
             await cur.close()
             await db.commit()
@@ -178,11 +180,14 @@ def create_db():
 
     async def _execute():
         async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute('''CREATE TABLE "HANdata" (
-                              `id`    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
-                              'date'	STRING,
-                          'effect' REAL
-                          )''')
+            try:
+                cur = await db.execute('''CREATE TABLE "HANdata" (
+                                       `id`    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
+                                       'date'	STRING,
+                                       'effect' REAL
+                                       )''')
+            except sqlite3.OperationalError:
+                pass
             await cur.close()
 
     loop.run_until_complete(_execute())
@@ -209,6 +214,6 @@ def run():
 
 
 if __name__ == '__main__':
-    if False:
+    if DB_PATH:
         create_db()
     run()
