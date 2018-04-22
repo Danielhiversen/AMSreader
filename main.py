@@ -181,13 +181,15 @@ def create_db():
 
     async def _execute():
         async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute('''CREATE TABLE "HANdata" (
-                                   `id`    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
-                                   'date'	STRING,
-                                   'effect' REAL
-                                   )''')
-
-            await cur.close()
+            try:
+                cur = await db.execute('''CREATE TABLE "HANdata" (
+                                       `id`    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
+                                       'date'	STRING,
+                                       'effect' REAL
+                                       )''')
+                await cur.close()
+            except sqlite3.OperationalError:
+                pass
 
     loop.run_until_complete(_execute())
 
