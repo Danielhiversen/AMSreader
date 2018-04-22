@@ -8,6 +8,7 @@ from threading import Thread
 import aiosqlite
 import paho.mqtt.client as mqtt
 import serial
+import sqlite3
 from colorlog import ColoredFormatter
 
 USB_PORT = "/dev/ttyUSB0"
