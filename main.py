@@ -11,11 +11,11 @@ import serial
 import sqlite3
 from colorlog import ColoredFormatter
 
-USB_PORT = "/dev/ttyUSB0"
+USB_PORT = "/dev/ttyUSB1"
 DB_PATH = 'sqlite.db'
-MQTT_HOST = '192.168.80.197'
+MQTT_HOST = '192.168.80.170'
 
-MQTT_USERNAME = 'homeassistant'
+MQTT_USERNAME = ''
 MQTT_PASSWORD = ''
 MQTT_PORT = 1883
 MQTT_TIMEOUT = 60
@@ -46,6 +46,9 @@ class DataHandler(object):
     def __init__(self):
         self.meter_id = None
         self.effect = deque(maxlen=30)
+        self.avg_hourly_effect = 0
+        self.current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+        self.last_effect_time = datetime.now()
         self.mqtt_client = None
         self.connected = False
         self.prev_meter_value = None
@@ -78,13 +81,25 @@ class DataHandler(object):
         effect = decoded_data.get('Effect')
         if effect:
             self.effect.append(effect)
+            date = "%02d%02d%02d_%02d%02d%02d" % (decoded_data['second'], decoded_data['minute'], decoded_data['hour'],
+                                              decoded_data['day'], decoded_data['month'], decoded_data['year'])
+            try:
+                ts = datetime.strptime(date, '%S%M%H_%d%m%Y')
+            except ValueError:
+                _LOGGER.error(txt_buf, exc_info=True)
+                return
+            if self.current_hour.hour < ts.hour or self.current_hour.date() < ts.date():
+                self.current_hour = ts.replace(minute=0, second=0, microsecond=0)
+                self.avg_hourly_effect = 0
+            self.avg_hourly_effect += effect * (ts - self.last_effect_time).total_seconds()
+            self.last_effect_time = ts
         meter_id = decoded_data.get('Meter-ID')
         if meter_id:
             self.meter_id = meter_id
         _LOGGER.info("Decoded data %s:", decoded_data)
 
-        self.loop.call_soon_threadsafe(asyncio.async, self.send_to_db(decoded_data))
         self.loop.call_soon_threadsafe(asyncio.async, self.send_to_mqtt(decoded_data))
+        self.loop.call_soon_threadsafe(asyncio.async, self.send_to_db(decoded_data))
 
     async def send_to_db(self, data):
         if not self.db_path:
@@ -92,9 +107,8 @@ class DataHandler(object):
         effect = data.get('Effect')
         if not effect:
             return
-        date = data.get('day', '') + data.get('month', '') + data.get('year', '') +\
-            data.get('hour', '') + data.get('minute', '') + data.get('second', '')
-
+        date = "%02d%02d%02d_%02d%02d%02d" % (data['second'], data['minute'], data['hour'],
+                                              data['day'], data['month'], data['year'])
         async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute('''INSERT INTO HANdata(date, effect) VALUES(?, ?)''', (date, effect))
             await cur.close()
@@ -103,6 +117,12 @@ class DataHandler(object):
     async def send_to_mqtt(self, data):
         if not self.connected or not self.meter_id:
             return
+        val = data.get('Effect')
+        if val:
+            prefix = '{}/{}/{}'.format(str(self.meter_id), 'effect', 'watt')
+            self.mqtt_client.publish(prefix, val, qos=1, retain=True)
+
+        now = datetime.now()
         if 'Cumulative_hourly_active_import_energy' in data:
             val = data.get('Cumulative_hourly_active_import_energy')
             prefix = '{}/{}/{}'.format(str(self.meter_id),
@@ -118,13 +138,18 @@ class DataHandler(object):
             prefix = '{}/{}/{}'.format(str(self.meter_id),
                                        'Cumulative_hourly_reactive_import_energy', 'wh')
             self.mqtt_client.publish(prefix, val, qos=1, retain=True)
-        now = datetime.now()
+
         if now - self._last_mqtt < timedelta(minutes=1):
             return
         self._last_mqtt = now
-        prefix = '{}/{}/{}'.format(str(self.meter_id), 'effect', 'watt')
+        prefix = '{}/{}/{}'.format(str(self.meter_id), 'effect_avg', 'watt')
         val = round(sum(self.effect) / len(self.effect), 1)
         self.mqtt_client.publish(prefix, val, qos=1, retain=True)
+
+        prefix = '{}/{}/{}'.format(str(self.meter_id), 'hourly_cons', 'ws')
+        val = self.avg_hourly_effect
+        self.mqtt_client.publish(prefix, val, qos=1, retain=True)
+        
         _LOGGER.info("Watt: %s", val)
 
     @staticmethod
@@ -190,13 +215,16 @@ def create_db():
                 await cur.close()
             except sqlite3.OperationalError:
                 pass
-
     loop.run_until_complete(_execute())
 
 
 def run():
     txt_buf = ''
-    ser = serial.Serial(USB_PORT, baudrate=2400, timeout=0, parity=serial.PARITY_NONE)
+    try:
+        ser = serial.Serial(USB_PORT, baudrate=2400, timeout=0, parity=serial.PARITY_NONE)
+    except:
+        _LOGGER.error("Failed to connect: ", exc_info=True)
+        return
     data_handler = DataHandler()
     while True:
         if ser.inWaiting():
